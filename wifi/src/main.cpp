@@ -3,8 +3,8 @@
 
 #define DATAPRICE 11
 #define HEADER 127
-const char* ssid = "uhouhoGoogle";
-const char* password = "v44bnxa4xm7ki";
+const char* ssid = "123456789"//自分が使用するSSID
+const char* password = "qwerty";//パスワード
 
 WiFiServer server(80);
 
