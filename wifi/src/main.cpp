@@ -1,173 +1,180 @@
+#include <Arduino.h>
 #include <WiFi.h>
-#include <stdlib.h>
 
-#define DATAPRICE 11
-#define HEADER 127
-const char* ssid = "123456789"//自分が使用するSSID
-const char* password = "qwerty";//パスワード
+void doInitialize();
+void httpListen();
+void httpRequestProccess(String*);
+void httpSendResponse(WiFiClient*);
+void connectToWifi();
 
-WiFiServer server(80);
+#define WIFI_SSID "xxxxxxxxxxxxx"
+#define WIFI_PASSWORD "xxxxxxxxxxxxxxx"
+int bno055_value = 0;
 
-String header;
+char SliderValue[10] = "0"; // 文字列として扱うためのバッファ
 
-int value = 0;
+#define SPI_SPEED   115200
+#define HTTP_PORT 80
 
-String output26State = "off";
-String output27State = "off";
+WiFiServer server(HTTP_PORT);
 
-const int output26 = 26;
-const int output27 = 27;
+const String strResponseHeader = "HTTP/1.1 200 OK\r\nContent-Type:text/html\r\n"
+        "Connection:close\r\n\r\n";
 
-unsigned long currentTime = millis();
-unsigned long previousTime = 0; 
-const long timeoutTime = 2000;
+/* HTMLページ構成要素 */
+const String strHtmlHeader = R"rawliteral(
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      html { font-family: Helvetica; display: inline-block; margin: 0px auto;text-align: center;} 
+      h1 {font-size:28px;} 
+      .btn_on { padding:12px 30px; text-decoration:none; font-size:24px; background-color:
+        #668ad8; color: #FFF; border-bottom: solid 4px #627295; border-radius: 2px;}
+      .btn_on:active { -webkit-transform: translateY(0px); transform: translateY(0px);
+        border-bottom: none;}
+      .btn_off { background-color: #555555; border-bottom: solid 4px #333333;}
+      .slider { width: 400px;}
+    </style>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+  </head>
+)rawliteral";
 
-void sendSensorData(WiFiClient& client, const char sensorData[]) {
-  client.print("Sensor Data: ");
-  for (int i = 0; i < DATAPRICE; i++) {
-    client.print(sensorData[i]);
-    client.print(" ");
-  }
-}
+const String strHtmlBody = R"rawliteral(
+  <body><h1>%PAGE_TITLE%</h1>
+    <p>LED State : %LED_STATE%</p>
+    <p>%BUTTON_STATE%</p>
+    <p>Brightness (<span id="brightValue"></span>)</p>
+    <input type="range" min="0" max="100" step="5" class="slider" id="slideBar" onchange="slideValue(this.value)" 
+    value="%SLIDER_VALUE%" />
+    <script> var obj = document.getElementById("slideBar");
+    var target = document.getElementById("brightValue");
+    target.innerHTML = obj.value;
+    obj.oninput = function() { obj.value = this.value; target.innerHTML = this.value; }
+    function slideValue(val) { $.get("/?value=" + val + '&'); { Connection: close}; }
+    </script>
+    <head>
+    <meta charset="UTF-8" />
+    <title>doughnut and pie chart</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.7.1"></script>
+    <script>
+      window.onload = function () {
+        let context = document.querySelector("#sushi_circle").getContext('2d')
+        new Chart(context, {
+          type: 'doughnut',
+          data: {
+            labels: ["bno055",""],
+            datasets: [{
+                backgroundColor: ["#fa8072", "#00ff7f"],
+              data: [%BNO055_VALUE%,360-%BNO055_VALUE%]
+            }]
+          },
+          options: {
+            responsive: false,
+          }
+        });
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="sushi_circle" width="400" height="400"></canvas>
+  </body>
+  </body>
+</html>
+)rawliteral";
+
+const String strButtonOn = R"rawliteral(
+    <a href="/ON"><button class="btn_on">&nbsp;ON&nbsp;</button></a> )rawliteral";
+const String strButtonOff = R"rawliteral(
+    <a href="/OFF"><button class="btn_on btn_off">OFF</button></a> )rawliteral";
 
 void setup() {
-  Serial.begin(115200);
-  pinMode(output26, OUTPUT);
-  pinMode(output27, OUTPUT);
-  digitalWrite(output26, LOW);
-  digitalWrite(output27, LOW);
-
-  Serial2.begin(115200, SERIAL_8N1, 16, 17);
-
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi connected.");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
-  server.begin();
+    
+    doInitialize();
+    connectToWifi();
 }
 
 void loop() {
-  WiFiClient client = server.available();
-
-  char data[12];
-  data[0] = 127;
-  data[1] = 127;
-  data[11] = 0;
-  char getdata[DATAPRICE + 2];
-  int flag = 0;
-
-  // データの送信処理（Serial2からのデータ送信）
-  for (int i = 2; i < 11; i++) {
-    data[i] = (int)(i * 14);
-  }
-  if (Serial2.available()) {
-    if (Serial2.read() == (int)HEADER) {
-      flag++;
+    bno055_value++;
+    if(bno055_value >100){
+        bno055_value = 0;
     }
-    if (flag == 2) {
-      for (int i = 0; i < DATAPRICE; i++) {
-        getdata[i] = Serial2.read();
-      }
-      printf("success");
-      flag = 0;
-    }
+    httpListen();
+}
 
-    // データ送信処理
-    for (int i = 0; i < 11; i++) {
-      getdata[i] = i;
-      printf("%3d-", getdata[i]);
-    }
-    printf("|");
-    printf("%3d %3d %3d", (int)getdata[0] * 100 + (int)getdata[1], getdata[2] * 100 + getdata[3], getdata[4] * 100 + getdata[5]);
-    int yaw = getdata[0] * 100 + getdata[1];
-    printf("\n");
-    for (int i = 2; i < 11; i++) {
-      data[11] += data[i];
-    }
-    for (int i = 0; i < 12; i++) {
-      Serial2.print(data[i]);
-    }
-  } else {
-    printf("not success \n");
-  }
+void doInitialize() {
+    Serial.begin(SPI_SPEED);
+}
 
-  if (client) {
-    currentTime = millis();
-    previousTime = currentTime;
-    String currentLine = "";
+void httpListen() {
+    String strBuffer = "";
+    WiFiClient client = server.available();
 
-    while (1) {
-      currentTime = millis();
-      if (client.available()) {
-        char c = client.read();
-        Serial.write(c);
-        header += c;
-        if (c == '\n') {
-          if (currentLine.length() == 0) {
-            Serial.println("New Client.");
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-type:text/html");
-            client.println("Connection: close");
-            client.println();
-            sendSensorData(client, getdata);
-            client.println();
-            if (header.indexOf("GET /26/on") >= 0) {
-              Serial.println("GPIO 26 on");
-              output26State = "on";
-              digitalWrite(output26, HIGH);
-            } else if (header.indexOf("GET /26/off") >= 0) {
-              Serial.println("GPIO 26 off");
-              output26State = "off";
-              digitalWrite(output26, LOW);
-            } else if (header.indexOf("GET /27/on") >= 0) {
-              Serial.println("GPIO 27 on");
-              output27State = "on";
-              digitalWrite(output27, HIGH);
-            } else if (header.indexOf("GET /27/off") >= 0) {
-              Serial.println("GPIO 27 off");
-              output27State = "off";
-              digitalWrite(output27, LOW);
+    if (client) {
+        String currentLine = "";
+        while (client.connected()) {
+            if (client.available()) {
+                char c = client.read();
+                strBuffer += c;
+                if (c == '\n') {
+                    if (currentLine.length() == 0) {
+                        httpRequestProccess(&strBuffer);
+                        httpSendResponse(&client);
+                        break;
+                    } else {
+                        currentLine = "";
+                    }
+                } else if (c != '\r') {
+                    currentLine += c;
+                }
             }
-            client.println("<!DOCTYPE html><html>");
-            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-            client.println("<link rel=\"icon\" href=\"data:,\">");
-            client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
-            client.println(".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;");
-            client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
-            client.println(".button2 {background-color: #555555;}</style></head>");
-            client.println("<body><h1>ESP32 Web Server</h1>");
-            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-            client.println("<p>GPIO 26 - State " + output26State + "</p>");
-            if (output26State == "off") {
-              client.println("<p><a href=\"/26/on\"><button class=\"button\">ON</button></a></p>");
-            } else {
-              client.println("<p><a href=\"/26/off\"><button class=\"button button2\">OFF</button></a></p>");
-            }
-            client.println("<p>GPIO 27 - State " + output27State + "</p>");
-            if (output27State == "off") {
-              client.println("<p><a href=\"/27/on\"><button class=\"button\">ON</button></a></p>");
-            } else {
-              client.println("<p><a href=\"/27/off\"><button class=\"button button2\">OFF</button></a></p>");
-            }
-            client.println("</body></html>");
-            client.println();
-            break;
-          } else {
-            currentLine = "";
-          }
-        } else if (c != '\r') {
-          currentLine += c;
         }
-      }
+        client.stop();
     }
+}
 
-    header = "";
-  }
+void httpRequestProccess(String* strbuf) {
+    if (strbuf->indexOf("GET /ON") >= 0) {
+        Serial.println("GET /ON");
+    } else if (strbuf->indexOf("GET /OFF") >= 0) {
+        Serial.println("GET /OFF");
+    } 
+    if (strbuf->indexOf("GET /?value=") >= 0) {
+        int pos1 = strbuf->indexOf('=');
+        int pos2 = strbuf->indexOf('&');
+        String strSlider = strbuf->substring(pos1 + 1, pos2);
+        Serial.print("Value="); Serial.println(strSlider);
+        strSlider.toCharArray(SliderValue, sizeof(SliderValue));
+    }
+}
+
+void httpSendResponse(WiFiClient* client) {
+    client->println(strResponseHeader);
+    client->println(strHtmlHeader);
+
+    String buf = strHtmlBody;
+    buf.replace("%PAGE_TITLE%", "Web Server");
+    buf.replace("%LED_STATE%", "Unknown");
+    buf.replace("%BUTTON_STATE%", strButtonOn);
+    buf.replace("%SLIDER_VALUE%", SliderValue);
+    buf.replace("%BNO055_VALUE%", String(bno055_value)); 
+    client->println(buf);
+    client->println();
+}
+
+void connectToWifi() {
+    // Wi-Fi接続して
+    Serial.print("Connecting to Wi-Fi ");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("");
+    Serial.println("WiFi connected.");
+    Serial.print("  *IP address: ");
+    Serial.println(WiFi.localIP());
+    server.begin();
 }
